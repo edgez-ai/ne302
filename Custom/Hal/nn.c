@@ -262,9 +262,12 @@ static int model_init(const uintptr_t model_ptr, nn_t *nn)
     /* Create and install an instance of the relocatable model */
     ll_aton_reloc_config config;
 
-    nn->exec_ram_addr = hal_mem_alloc_large(rt.rt_ram_copy);
-    nn->ext_ram_addr = hal_mem_alloc_large(rt.ext_ram_sz);
-    if (nn->exec_ram_addr == NULL || nn->ext_ram_addr == NULL) {
+    /* FastDepth keeps activations in NPU RAM and reports ext_ram_sz = 0.
+     * hal_mem_alloc() rejects a zero size, so only allocate pools that exist. */
+    nn->exec_ram_addr = (rt.rt_ram_copy > 0) ? hal_mem_alloc_large(rt.rt_ram_copy) : NULL;
+    nn->ext_ram_addr = (rt.ext_ram_sz > 0) ? hal_mem_alloc_large(rt.ext_ram_sz) : NULL;
+    if ((rt.rt_ram_copy > 0 && nn->exec_ram_addr == NULL) ||
+        (rt.ext_ram_sz > 0 && nn->ext_ram_addr == NULL)) {
         storage_unlock_ext();
         LOG_DRV_ERROR("model_init: OOM\r\r\n");
         return -1;
@@ -1139,6 +1142,9 @@ cJSON* nn_create_ai_result_json(const nn_result_t* ai_result) {
             break;
         case PP_TYPE_SSEG:
             type_name = "semantic_segmentation";
+            break;
+        case PP_TYPE_DEPTH:
+            type_name = "depth";
             break;
         default:
             type_name = "unknown";

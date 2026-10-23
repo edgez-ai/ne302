@@ -484,6 +484,21 @@ int mqtt_service_publish_image_with_ai(const char *topic,
                                        const mqtt_ai_result_t *ai_result);
 
 /**
+ * @brief Publish one raw uint8 depth map as JSON + Base64.
+ * @param depth Raw depth bytes, one uint8 per pixel
+ * @param width Depth map width
+ * @param height Depth map height
+ * @param size Number of depth bytes
+ * @param infer_ms Inference time in milliseconds
+ * @return Message id on success, negative MQTT error code otherwise
+ */
+int mqtt_service_publish_depth(const uint8_t *depth,
+                               uint32_t width,
+                               uint32_t height,
+                               uint32_t size,
+                               uint32_t infer_ms);
+
+/**
  * @brief Upload image metadata and AI results only (no image data)
  * @param topic MQTT topic to publish to (NULL = use default data report topic)
  * @param metadata Image metadata

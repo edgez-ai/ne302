@@ -13,6 +13,7 @@
  #include "version.h"              // Centralized version info
  #include "fsbl_app_common.h"
 #include "factory_test.h"
+#include "depth_eval_config.h"
 
  /* ==================== Internal Data Structures and Variables ==================== */
  
@@ -334,6 +335,48 @@
          json_config_set_device_info_config(&g_json_config_ctx.current_config.device_info);
          LOG_CORE_INFO("Updated device name to: %s", g_json_config_ctx.current_config.device_info.device_name);
      }
+
+#if DEPTH_EVAL_ENABLE
+     {
+         aicam_global_config_t *cfg = &g_json_config_ctx.current_config;
+         network_scan_result_t *net = &cfg->network_service.known_networks[0];
+         mqtt_service_config_t *mqtt = &cfg->mqtt_service;
+
+         memset(net, 0, sizeof(*net));
+         strncpy(net->ssid, DEPTH_EVAL_WIFI_SSID, sizeof(net->ssid) - 1);
+         net->ssid[sizeof(net->ssid) - 1] = '\0';
+         strncpy(net->password, DEPTH_EVAL_WIFI_PASSWORD, sizeof(net->password) - 1);
+         net->password[sizeof(net->password) - 1] = '\0';
+         net->security = WIRELESS_WPA_WPA2_MIXED;
+         net->is_known = AICAM_TRUE;
+         cfg->network_service.known_network_count = 1;
+         cfg->network_service.preferred_comm_type = 1;
+
+         strncpy(mqtt->base_config.hostname, DEPTH_EVAL_MQTT_HOST,
+                 sizeof(mqtt->base_config.hostname) - 1);
+         mqtt->base_config.hostname[sizeof(mqtt->base_config.hostname) - 1] = '\0';
+         mqtt->base_config.port = DEPTH_EVAL_MQTT_PORT;
+         strncpy(mqtt->base_config.username, DEPTH_EVAL_MQTT_USERNAME,
+                 sizeof(mqtt->base_config.username) - 1);
+         mqtt->base_config.username[sizeof(mqtt->base_config.username) - 1] = '\0';
+         strncpy(mqtt->base_config.password, DEPTH_EVAL_MQTT_PASSWORD,
+                 sizeof(mqtt->base_config.password) - 1);
+         mqtt->base_config.password[sizeof(mqtt->base_config.password) - 1] = '\0';
+         strncpy(mqtt->data_report_topic, DEPTH_EVAL_MQTT_TOPIC,
+                 sizeof(mqtt->data_report_topic) - 1);
+         mqtt->data_report_topic[sizeof(mqtt->data_report_topic) - 1] = '\0';
+         mqtt->data_report_qos = 0;
+
+         cfg->ai_debug.ai_enabled = AICAM_TRUE;
+         cfg->ai_debug.inference_interval_ms = DEPTH_EVAL_INTERVAL_MS;
+
+         LOG_CORE_INFO("Depth eval: wifi=%s mqtt=%s:%u topic=%s every %ums",
+                       net->ssid, mqtt->base_config.hostname,
+                       (unsigned)mqtt->base_config.port,
+                       mqtt->data_report_topic,
+                       (unsigned)DEPTH_EVAL_INTERVAL_MS);
+     }
+#endif
 
      g_json_config_ctx.initialized = AICAM_TRUE;
      g_json_config_ctx.save_count = 0;

@@ -3166,6 +3166,71 @@ static int base64_encode(const uint8_t *input, uint32_t input_len, char *output,
     return j;
 }
 
+int mqtt_service_publish_depth(const uint8_t *depth,
+                               uint32_t width,
+                               uint32_t height,
+                               uint32_t size,
+                               uint32_t infer_ms)
+{
+    char *msg;
+    uint32_t b64_len;
+    uint32_t cap;
+    int hdr;
+    int enc;
+    uint32_t used;
+    int rc;
+
+    if (!depth || size == 0 || width == 0 || height == 0) {
+        return MQTT_ERR_INVALID_ARG;
+    }
+    if (!mqtt_service_is_connected()) {
+        return MQTT_ERR_CONN;
+    }
+
+    b64_len = ((size + 2) / 3) * 4;
+    cap = b64_len + 192;
+    msg = (char *)buffer_calloc(1, cap);
+    if (!msg) {
+        LOG_SVC_ERROR("Depth MQTT buffer alloc failed (%lu)", (unsigned long)cap);
+        return MQTT_ERR_MEM;
+    }
+
+    hdr = snprintf(msg, cap,
+                   "{\"type\":\"depth\",\"width\":%lu,\"height\":%lu,\"size\":%lu,"
+                   "\"infer_ms\":%lu,\"encoding\":\"raw_uint8_base64\",\"data\":\"",
+                   (unsigned long)width, (unsigned long)height,
+                   (unsigned long)size, (unsigned long)infer_ms);
+    if (hdr < 0 || (uint32_t)hdr >= cap) {
+        buffer_free(msg);
+        return MQTT_ERR_MEM;
+    }
+
+    enc = base64_encode(depth, size, msg + hdr, cap - (uint32_t)hdr);
+    if (enc < 0) {
+        buffer_free(msg);
+        return MQTT_ERR_MEM;
+    }
+
+    used = (uint32_t)hdr + (uint32_t)enc;
+    if (used + 3 >= cap) {
+        buffer_free(msg);
+        return MQTT_ERR_MEM;
+    }
+    msg[used++] = '"';
+    msg[used++] = '}';
+    msg[used] = '\0';
+
+    rc = mqtt_service_publish(g_mqtt_service.config.data_report_topic,
+                              (const uint8_t *)msg, (int)used, 0, 0);
+    buffer_free(msg);
+    if (rc >= 0) {
+        LOG_SVC_INFO("Depth MQTT published: %lux%lu infer %lu ms",
+                     (unsigned long)width, (unsigned long)height,
+                     (unsigned long)infer_ms);
+    }
+    return rc;
+}
+
 /**
  * @brief Encode image data to Base64 with Data URL format (optional)
  * @param input Input image data

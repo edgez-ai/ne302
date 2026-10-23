@@ -16,6 +16,8 @@
 #include "cmsis_os2.h"
 #include "upgrade_manager.h"
 #include "drtc.h"
+#include "mqtt_service.h"
+#include "depth_eval_config.h"
 
 
 /* ==================== Internal Function Declarations ==================== */
@@ -35,6 +37,7 @@ static aicam_result_t video_ai_start_device(video_ai_node_data_t *data);
 static aicam_result_t video_ai_stop_device(video_ai_node_data_t *data);
 static aicam_result_t video_ai_process_frame(video_ai_node_data_t *data, 
                                             video_frame_t **output_frame);
+static void video_ai_emit_depth_b64(const nn_result_t *result, uint32_t infer_ms);
 static aicam_result_t video_ai_init_draw_service(video_ai_node_data_t *data);
 static aicam_result_t video_ai_deinit_draw_service(video_ai_node_data_t *data);
 
@@ -657,6 +660,9 @@ static aicam_result_t video_ai_process_frame(video_ai_node_data_t *data,
     uint32_t infer_start_tick = osKernelGetTickCount();
     int nn_ret = nn_inference_frame(input_frame_buffer, camera_buffer_with_frame_id.size, &nn_result);
     uint32_t inference_time_ms = osKernelGetTickCount() - infer_start_tick;
+    if (nn_ret == 0) {
+        video_ai_emit_depth_b64(&nn_result, inference_time_ms);
+    }
     // Anchor pacing to the attempt so inference errors keep the configured cadence
     data->last_inference_tick = infer_start_tick;
 
@@ -1074,5 +1080,78 @@ static aicam_result_t video_ai_deinit_draw_service(video_ai_node_data_t *data)
     LOG_CORE_INFO("AI draw service deinitialized");
     
     return AICAM_OK;
+}
+
+/* Raw depth is about 49 KB. Log lines are capped at 256 bytes, so the
+ * Base64 payload goes out through printf in short lines. */
+#define DEPTH_B64_INTERVAL_MS DEPTH_EVAL_INTERVAL_MS
+
+static void video_ai_emit_depth_b64(const nn_result_t *result, uint32_t infer_ms)
+{
+    static const char b64_table[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    static uint32_t last_ms;
+    static uint8_t started;
+    uint32_t now;
+    const uint8_t *src;
+    uint32_t len;
+    uint32_t i;
+    uint32_t col;
+    char line[80];
+
+    if (result == NULL || result->type != PP_TYPE_DEPTH || !result->is_valid) {
+        return;
+    }
+    if (result->depth.depth == NULL || result->depth.size == 0) {
+        return;
+    }
+
+    now = osKernelGetTickCount();
+    if (started && (uint32_t)(now - last_ms) < DEPTH_B64_INTERVAL_MS) {
+        return;
+    }
+    started = 1;
+    last_ms = now;
+
+    src = result->depth.depth;
+    len = result->depth.size;
+    printf("\r\nDEPTH_B64_BEGIN w=%lu h=%lu size=%lu infer_ms=%lu\r\n",
+           (unsigned long)result->depth.width,
+           (unsigned long)result->depth.height,
+           (unsigned long)len,
+           (unsigned long)infer_ms);
+
+    col = 0;
+    i = 0;
+    while (i < len) {
+        uint32_t remain = len - i;
+        uint8_t a = src[i++];
+        uint8_t b = (remain > 1) ? src[i++] : 0;
+        uint8_t c = (remain > 2) ? src[i++] : 0;
+
+        line[col++] = b64_table[a >> 2];
+        line[col++] = b64_table[((a & 0x03u) << 4) | (b >> 4)];
+        line[col++] = (remain > 1) ? b64_table[((b & 0x0fu) << 2) | (c >> 6)] : '=';
+        line[col++] = (remain > 2) ? b64_table[c & 0x3fu] : '=';
+        if (col >= 76) {
+            line[col] = '\0';
+            printf("%s\r\n", line);
+            col = 0;
+        }
+    }
+    if (col > 0) {
+        line[col] = '\0';
+        printf("%s\r\n", line);
+    }
+    printf("DEPTH_B64_END\r\n");
+
+    {
+        int mqtt_rc = mqtt_service_publish_depth(src, result->depth.width,
+                                                 result->depth.height,
+                                                 len, infer_ms);
+        if (mqtt_rc < 0) {
+            LOG_CORE_WARN("Depth MQTT publish failed: %d", mqtt_rc);
+        }
+    }
 }
 

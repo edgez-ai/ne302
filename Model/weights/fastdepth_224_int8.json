@@ -1,0 +1,67 @@
+{
+  "version": "1.0.0",
+  "model_info": {
+    "name": "FastDepth 224 NYU Depth V2",
+    "version": "1.0.0",
+    "description": "ST model-zoo FastDepth int8 monocular depth, 224x224",
+    "type": "DEPTH_ESTIMATION",
+    "framework": "TFLITE",
+    "author": "STMicroelectronics"
+  },
+  "input_spec": {
+    "width": 224,
+    "height": 224,
+    "channels": 3,
+    "data_type": "uint8",
+    "color_format": "RGB888_YUV444_1",
+    "normalization": {
+      "enabled": false,
+      "mean": [0.0, 0.0, 0.0],
+      "std": [1.0, 1.0, 1.0]
+    }
+  },
+  "output_spec": {
+    "num_outputs": 1,
+    "outputs": [
+      {
+        "name": "Transpose_195_out_0",
+        "batch": 1,
+        "height": 224,
+        "width": 224,
+        "channels": 1,
+        "data_type": "uint8",
+        "scale": 1.0,
+        "zero_point": 0
+      }
+    ]
+  },
+  "memory": {
+    "exec_memory_pool": 0,
+    "exec_memory_size": 0,
+    "ext_memory_pool": 0,
+    "ext_memory_size": 0,
+    "alignment_requirement": 32
+  },
+  "postprocess_type": "pp_depth_ui",
+  "postprocess_params": {
+    "width": 224,
+    "height": 224
+  },
+  "runtime": {
+    "execution": {
+      "mode": "SYNC",
+      "priority": 5,
+      "timeout_ms": 5000
+    },
+    "memory_management": {
+      "cache_policy": "WRITE_BACK",
+      "memory_pool_size": 2097152,
+      "garbage_collection": false
+    },
+    "debugging": {
+      "log_level": "INFO",
+      "performance_monitoring": true,
+      "memory_profiling": false
+    }
+  }
+}

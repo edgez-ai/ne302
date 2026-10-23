@@ -44,6 +44,7 @@ typedef enum {
 	PP_TYPE_SPE,
 	PP_TYPE_ISEG,
 	PP_TYPE_SSEG,
+	PP_TYPE_DEPTH,
 } pp_type_t;
 
 /* OD postprocess output */
@@ -130,6 +131,14 @@ typedef struct {
 	char **class_names;  // array of C strings (may be NULL entries)
 }pp_sseg_out_t;
 
+/* Monocular depth output: one uint8 per pixel, raw model values */
+typedef struct {
+	uint8_t *depth;
+	uint32_t width;
+	uint32_t height;
+	uint32_t size;
+}pp_depth_out_t;
+
 /* Postprocess result */
 typedef struct {
 	pp_type_t type;
@@ -141,6 +150,7 @@ typedef struct {
 		pp_spe_out_t spe;
 		pp_iseg_out_t iseg;
 		pp_sseg_out_t sseg;
+		pp_depth_out_t depth;
 	};
 }pp_result_t;
 

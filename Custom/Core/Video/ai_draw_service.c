@@ -179,6 +179,10 @@ aicam_result_t ai_draw_results(uint8_t *fb,
                 result_code = ai_draw_iseg_results(fb, fb_width, fb_height, &result->iseg);
             }
             break;
+
+        case PP_TYPE_DEPTH:
+            result_code = AICAM_OK;
+            break;
             
         default:
             LOG_SVC_WARN("Unsupported AI result type: %d", result->type);
