@@ -28,6 +28,10 @@
 #define MQTT_SERVICE_VERSION "1.0.0"
 #define MAX_EVENT_CALLBACKS 8
 
+/* SoftAP-only: PC joins device hotspot (e.g. 192.168.10.101) — STA never comes up.
+ * MQTT must treat AP OR STA as usable L3 path (MS/lwIP can reach SoftAP clients). */
+#define MQTT_NET_READY_FLAGS   (SERVICE_READY_STA | SERVICE_READY_AP)
+
 /* ==================== MQTT Event Flags ==================== */
 
 // MQTT event flag bit definitions (each event_id corresponds to one bit)
@@ -191,9 +195,9 @@ static aicam_result_t mqtt_client_init_ms(const ms_mqtt_config_t *config)
  */
 static aicam_result_t mqtt_client_init_si91x(const ms_mqtt_config_t *config)
 {
-    aicam_result_t result = service_wait_for_ready(SERVICE_READY_STA, AICAM_TRUE, osWaitForever);
+    aicam_result_t result = service_wait_for_ready(MQTT_NET_READY_FLAGS, AICAM_FALSE, osWaitForever);
     if (result != AICAM_OK) {
-        LOG_SVC_ERROR("Failed to wait for STA service to be ready: %d", result);
+        LOG_SVC_ERROR("Failed to wait for STA/AP network ready: %d", result);
         return AICAM_ERROR;
     }
     result = si91x_mqtt_client_init(config);
@@ -1298,14 +1302,13 @@ aicam_result_t mqtt_service_start(void)
 
     g_mqtt_service.running = AICAM_TRUE;
 
-    // Create MQTT connection task to monitor STA connection and auto-connect
+    // Create MQTT connection task to monitor STA/AP and auto-connect
     if(g_mqtt_service.api_type == MQTT_API_TYPE_SI91X) {
-        // Use timeout instead of infinite wait to avoid blocking forever
-        // when network is not available
-        #define STA_READY_TIMEOUT_MS  30000
-        aicam_result_t result = service_wait_for_ready(SERVICE_READY_STA, AICAM_TRUE, STA_READY_TIMEOUT_MS);
+        // SoftAP-only (no STA) must also proceed — broker may be on SoftAP client PC
+        #define MQTT_NET_READY_TIMEOUT_MS  30000
+        aicam_result_t result = service_wait_for_ready(MQTT_NET_READY_FLAGS, AICAM_FALSE, MQTT_NET_READY_TIMEOUT_MS);
         if (result != AICAM_OK) {
-            LOG_SVC_ERROR("STA service not ready within %d ms: %d", STA_READY_TIMEOUT_MS, result);
+            LOG_SVC_ERROR("STA/AP not ready within %d ms: %d", MQTT_NET_READY_TIMEOUT_MS, result);
             return result;
         }
         result = mqtt_service_connect();
@@ -4249,7 +4252,7 @@ void mqtt_cmd_register(void)
 }
 
 /**
- * @brief MQTT connection task - monitors STA connection and triggers MQTT connect
+ * @brief MQTT connection task - monitors STA/AP and triggers MQTT connect
  * @param argument Task argument (unused)
  */
 static void mqtt_connect_task(void *argument)
@@ -4260,29 +4263,25 @@ static void mqtt_connect_task(void *argument)
     
     int retry_count = 5;
     while (g_mqtt_service.connect_task_running && g_mqtt_service.running && retry_count > 0) {
-        // Wait for STA to be ready (with timeout to allow periodic check)
-        aicam_result_t result = service_wait_for_ready(SERVICE_READY_STA, AICAM_TRUE, osWaitForever);
+        /* SoftAP alone is enough: laptop on device hotspot can host the broker */
+        aicam_result_t result = service_wait_for_ready(MQTT_NET_READY_FLAGS, AICAM_FALSE, osWaitForever);
         
         if (result == AICAM_OK) {
-            // STA is connected, check if MQTT should connect
             if (strcmp(g_mqtt_service.config.base_config.base.hostname, "mqtt.example.com") != 0) {
-                // Valid hostname configured
                 if (mqtt_service_is_connected() == AICAM_FALSE) {
-                    LOG_SVC_INFO("STA connected, attempting MQTT connection...");
-                    aicam_result_t result = mqtt_service_connect();
-                    if (result != AICAM_OK) {
-                        LOG_SVC_WARN("MQTT connection failed: %d, will retry when STA reconnects", result);
+                    LOG_SVC_INFO("Network ready (STA/AP), attempting MQTT connection...");
+                    aicam_result_t connect_result = mqtt_service_connect();
+                    if (connect_result != AICAM_OK) {
+                        LOG_SVC_WARN("MQTT connection failed: %d, will retry", connect_result);
                     } else {
                         LOG_SVC_INFO("MQTT connection successful");
                     }
                 }
             }
             
-            // Wait longer when connected to avoid busy loop
             osDelay(5000);
             retry_count--;
         } else {
-            // STA not ready, wait a bit and check again
             osDelay(500);
         }
     }

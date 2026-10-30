@@ -120,11 +120,14 @@ DEFAULT_PROFILE="${DEFAULT_PROFILE:-yolov8_od}"
 # ---------------------------------------------------------------------------
 profile_for_model() {  # profile_for_model <basename> <postprocess_type>
     case "$1" in
+        fastdepth_320*|fastdepth*320*) echo "reloc-ext3"; return ;;
+        fastdepth_224*|fastdepth*224*) echo "yolov8_od"; return ;;
         *) ;;
     esac
     case "$2" in
         pp_od_st_yolox_*) echo "yolox_od" ;;
         pp_mpe_*|pp_spe_*) echo "yolov8_mpe" ;;
+        pp_depth_*) echo "reloc-ext3" ;;
         *) echo "$DEFAULT_PROFILE" ;;
     esac
 }

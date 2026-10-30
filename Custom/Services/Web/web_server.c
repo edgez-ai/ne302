@@ -29,6 +29,7 @@
 #include "api_file_module.h"
 #include "web_recovery.h"
 #include "netif_manager.h"
+#include "mqtt_service.h"
 
 #define WEB_SERVER_STACK_SIZE (1024 * 32)
 #define WEB_SERVER_AP_SLEEP_TIMER_STACK_SIZE (1024 * 8)
@@ -246,15 +247,18 @@ static void web_conn_forget(struct mg_connection *c)
          return AICAM_ERROR_ALREADY_RUNNING;
      }
 
-    /* Initialize AP sleep timer from configuration */
-    network_service_config_t *config = NULL;
-    
-    // Dynamically allocate configuration structure
-    aicam_result_t result = json_config_get_network_service_config(config);
+    /* Initialize AP sleep timer from configuration.
+     * BUGFIX: previously passed a NULL pointer into
+     * json_config_get_network_service_config(), which writes through the
+     * argument and could hard-fault shortly after SoftAP came up — WiFi
+     * vanished while the status LED stayed on. */
+    network_service_config_t net_cfg;
+    memset(&net_cfg, 0, sizeof(net_cfg));
+    aicam_result_t result = json_config_get_network_service_config(&net_cfg);
     if (result == AICAM_OK) {
-        web_server_ap_sleep_timer_init(config->ap_sleep_time);
-        LOG_SVC_INFO("[WEB_SERVER] AP sleep timer initialized with %u seconds timeout", 
-                     config->ap_sleep_time);
+        web_server_ap_sleep_timer_init(net_cfg.ap_sleep_time);
+        LOG_SVC_INFO("[WEB_SERVER] AP sleep timer initialized with %u seconds timeout",
+                     net_cfg.ap_sleep_time);
     } else {
         /* Use default timeout if config is not available */
         web_server_ap_sleep_timer_init(600); // 10 minutes default
@@ -1248,7 +1252,14 @@ aicam_result_t web_server_ap_sleep_timer_check(void)
         return AICAM_OK;
     }
     else if (time_since_last_request >= g_web_server.ap_sleep_timeout) {
-        
+        /* SoftAP is the MQTT path when laptop joins NE302_… — do not tear it
+         * down while MQTT is live, or depth reporting dies with the hotspot. */
+        if (mqtt_service_is_initialized() && mqtt_service_is_connected()) {
+            g_web_server.last_request_time = current_time;
+            LOG_SVC_DEBUG("[WEB_SERVER] AP sleep deferred: MQTT connected over SoftAP");
+            return AICAM_OK;
+        }
+
         // Shutdown AP hotspot
         if (communication_is_interface_connected(NETIF_NAME_WIFI_AP)) {
             LOG_SVC_INFO("[WEB_SERVER] AP is connected, AP sleep timeout reached (%u seconds), shutting down AP hotspot", (uint32_t)g_web_server.ap_sleep_timeout);

@@ -1487,6 +1487,11 @@ aicam_result_t json_config_config_to_isp_param(isp_config_t *isp_config, ISP_IQP
  /*=================== Network Service Configuration API Implementation ====================*/
  aicam_result_t json_config_get_network_service_config(network_service_config_t *network_service_config)
  {
+     if (!network_service_config)
+     {
+         return AICAM_ERROR_INVALID_PARAM;
+     }
+
      if (!g_json_config_ctx.initialized)
      {
          return AICAM_ERROR_NOT_INITIALIZED;

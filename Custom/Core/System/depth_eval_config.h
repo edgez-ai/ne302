@@ -17,6 +17,8 @@
 #define DEPTH_EVAL_MQTT_USERNAME   ""
 #define DEPTH_EVAL_MQTT_PASSWORD   ""
 #define DEPTH_EVAL_MQTT_TOPIC      "ne302/depth"
-#define DEPTH_EVAL_INTERVAL_MS     30000
+/* SoftAP+MQTT depth test: customer cadence ~30s. Faster rates stress SoftAP. */
+#define DEPTH_EVAL_INTERVAL_MS           30000u
+#define DEPTH_SOFTAP_TEST_INTERVAL_MS    30000u
 
 #endif

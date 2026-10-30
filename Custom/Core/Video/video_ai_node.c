@@ -18,6 +18,9 @@
 #include "drtc.h"
 #include "mqtt_service.h"
 #include "depth_eval_config.h"
+#include "communication_service.h"
+#include "netif_manager.h"
+#include "web_server.h"
 
 
 /* ==================== Internal Function Declarations ==================== */
@@ -550,15 +553,42 @@ static aicam_result_t video_ai_process_frame(video_ai_node_data_t *data,
     // Pace inference to the configured interval. Sleep in bounded slices so
     // config changes and pipeline stop are picked up within ~100 ms, and
     // never inside a camera ioctl (it holds the camera mutex while blocking).
-    if (data->config.inference_interval_ms != 0)
+    //
+    // SoftAP + no MQTT: skip FastDepth (provisioning / Web only).
+    // SoftAP + MQTT (customer depth test): paced infer — keep hotspot up while
+    // still delivering depth previews over MQTT (interval is tunable, not SLA).
+    if (communication_is_interface_connected(NETIF_NAME_WIFI_AP) &&
+        !mqtt_service_is_connected()) {
+        data->last_inference_tick = osKernelGetTickCount();
+        osDelay(100);
+        *output_frame = NULL;
+        return AICAM_OK;
+    }
     {
-        uint32_t elapsed_ms = osKernelGetTickCount() - data->last_inference_tick;
-        if (elapsed_ms < data->config.inference_interval_ms)
+        uint32_t pace_ms = data->config.inference_interval_ms;
+        if (pace_ms == 0 && !mqtt_service_is_connected()) {
+            pace_ms = 1000;
+        }
+        if (communication_is_interface_connected(NETIF_NAME_WIFI_AP) &&
+            mqtt_service_is_connected()) {
+            if (pace_ms == 0 || pace_ms < DEPTH_SOFTAP_TEST_INTERVAL_MS) {
+                pace_ms = DEPTH_SOFTAP_TEST_INTERVAL_MS;
+            }
+        } else if (mqtt_service_is_connected()) {
+            if (pace_ms == 0 || pace_ms < DEPTH_EVAL_INTERVAL_MS) {
+                pace_ms = DEPTH_EVAL_INTERVAL_MS;
+            }
+        }
+        if (pace_ms != 0)
         {
-            uint32_t remaining_ms = data->config.inference_interval_ms - elapsed_ms;
-            osDelay(remaining_ms < 100 ? remaining_ms : 100);
-            *output_frame = NULL;
-            return AICAM_OK;
+            uint32_t elapsed_ms = osKernelGetTickCount() - data->last_inference_tick;
+            if (elapsed_ms < pace_ms)
+            {
+                uint32_t remaining_ms = pace_ms - elapsed_ms;
+                osDelay(remaining_ms < 100 ? remaining_ms : 100);
+                *output_frame = NULL;
+                return AICAM_OK;
+            }
         }
     }
 
@@ -660,11 +690,16 @@ static aicam_result_t video_ai_process_frame(video_ai_node_data_t *data,
     uint32_t infer_start_tick = osKernelGetTickCount();
     int nn_ret = nn_inference_frame(input_frame_buffer, camera_buffer_with_frame_id.size, &nn_result);
     uint32_t inference_time_ms = osKernelGetTickCount() - infer_start_tick;
-    if (nn_ret == 0) {
+    if (nn_ret == 0 && mqtt_service_is_connected()) {
         video_ai_emit_depth_b64(&nn_result, inference_time_ms);
     }
     // Anchor pacing to the attempt so inference errors keep the configured cadence
     data->last_inference_tick = infer_start_tick;
+
+    /* SoftAP shares Si91x SPI with MQTT/NPU — yield so beacons stay alive. */
+    if (communication_is_interface_connected(NETIF_NAME_WIFI_AP)) {
+        osDelay(100);
+    }
 
     // return pipe2 buffer
     device_ioctl(camera_dev, CAM_CMD_RETURN_PIPE2_BUFFER, input_frame_buffer, 0);
@@ -1082,23 +1117,19 @@ static aicam_result_t video_ai_deinit_draw_service(video_ai_node_data_t *data)
     return AICAM_OK;
 }
 
-/* Raw depth is about 49 KB. Log lines are capped at 256 bytes, so the
- * Base64 payload goes out through printf in short lines. */
-#define DEPTH_B64_INTERVAL_MS DEPTH_EVAL_INTERVAL_MS
-
 static void video_ai_emit_depth_b64(const nn_result_t *result, uint32_t infer_ms)
 {
-    static const char b64_table[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     static uint32_t last_ms;
     static uint8_t started;
     uint32_t now;
+    uint32_t min_interval;
     const uint8_t *src;
     uint32_t len;
-    uint32_t i;
-    uint32_t col;
-    char line[80];
+    aicam_bool_t on_softap;
 
+    if (!mqtt_service_is_connected()) {
+        return;
+    }
     if (result == NULL || result->type != PP_TYPE_DEPTH || !result->is_valid) {
         return;
     }
@@ -1106,8 +1137,12 @@ static void video_ai_emit_depth_b64(const nn_result_t *result, uint32_t infer_ms
         return;
     }
 
+    /* 30s SoftAP cadence is enough — send full-resolution depth for review. */
+    on_softap = communication_is_interface_connected(NETIF_NAME_WIFI_AP);
+    min_interval = on_softap ? DEPTH_SOFTAP_TEST_INTERVAL_MS : DEPTH_EVAL_INTERVAL_MS;
+
     now = osKernelGetTickCount();
-    if (started && (uint32_t)(now - last_ms) < DEPTH_B64_INTERVAL_MS) {
+    if (started && (uint32_t)(now - last_ms) < min_interval) {
         return;
     }
     started = 1;
@@ -1115,35 +1150,12 @@ static void video_ai_emit_depth_b64(const nn_result_t *result, uint32_t infer_ms
 
     src = result->depth.depth;
     len = result->depth.size;
-    printf("\r\nDEPTH_B64_BEGIN w=%lu h=%lu size=%lu infer_ms=%lu\r\n",
-           (unsigned long)result->depth.width,
-           (unsigned long)result->depth.height,
-           (unsigned long)len,
-           (unsigned long)infer_ms);
-
-    col = 0;
-    i = 0;
-    while (i < len) {
-        uint32_t remain = len - i;
-        uint8_t a = src[i++];
-        uint8_t b = (remain > 1) ? src[i++] : 0;
-        uint8_t c = (remain > 2) ? src[i++] : 0;
-
-        line[col++] = b64_table[a >> 2];
-        line[col++] = b64_table[((a & 0x03u) << 4) | (b >> 4)];
-        line[col++] = (remain > 1) ? b64_table[((b & 0x0fu) << 2) | (c >> 6)] : '=';
-        line[col++] = (remain > 2) ? b64_table[c & 0x3fu] : '=';
-        if (col >= 76) {
-            line[col] = '\0';
-            printf("%s\r\n", line);
-            col = 0;
-        }
-    }
-    if (col > 0) {
-        line[col] = '\0';
-        printf("%s\r\n", line);
-    }
-    printf("DEPTH_B64_END\r\n");
+    LOG_CORE_INFO("DEPTH report w=%lu h=%lu size=%lu infer_ms=%lu softap=%d",
+                  (unsigned long)result->depth.width,
+                  (unsigned long)result->depth.height,
+                  (unsigned long)len,
+                  (unsigned long)infer_ms,
+                  (int)on_softap);
 
     {
         int mqtt_rc = mqtt_service_publish_depth(src, result->depth.width,
@@ -1151,6 +1163,8 @@ static void video_ai_emit_depth_b64(const nn_result_t *result, uint32_t infer_ms
                                                  len, infer_ms);
         if (mqtt_rc < 0) {
             LOG_CORE_WARN("Depth MQTT publish failed: %d", mqtt_rc);
+        } else {
+            (void)web_server_ap_sleep_timer_reset();
         }
     }
 }
