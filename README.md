@@ -10,6 +10,8 @@
 
 > 📋 **[Change Log](Docs/NE302_v4.3.1_ChangeLog.md)** — see what's new in v4.3.1
 
+> 📋 **[FastDepth SoftAP MQTT Evaluation Report](fastdepth_softap_mqtt_eval_report.md)** — SoftAP depth reporting eval (224 / ~30s)
+
 ![NE302](Docs/images/mini_all_board_1.png)
 
 ---
@@ -245,6 +247,7 @@ ne302/
 
 ## 📚 Resources
 
+- [**FastDepth SoftAP MQTT Evaluation Report**](fastdepth_softap_mqtt_eval_report.md) — SoftAP depth reporting evaluation
 - [**NE302 Wiki**](https://wiki.camthink.ai/docs/neoeyes-ne302-series/quick-start) — Full documentation & API reference
 - [**Hardware**](Hardware/) — Board schematics, layout, and BOM
 - [**camthink.ai**](https://www.camthink.ai/) — Product page & announcements
